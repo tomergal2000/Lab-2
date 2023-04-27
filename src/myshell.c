@@ -93,12 +93,8 @@ int main(int argc, char const *argv[])
             }
         }
 
-        /*Create children*/
+        /*Create child*/
         pid_t pid1 = fork();
-        if (needToPipe && pid1 != 0)
-        {
-            pid_t pid2 = fork();
-        }
 
         if (pid1 == 0)
         { /*Child 1 process*/
@@ -146,6 +142,7 @@ int main(int argc, char const *argv[])
                     waitpid(pid1, NULL, 0);
                     waitpid(pid2, NULL, 0);
                     freeCmdLines(cmd);
+                    usleep(10000);
                 }
                 else
                 { /*Child 2 process*/
