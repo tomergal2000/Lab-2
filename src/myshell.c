@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <ctype.h>
 #include <linux/limits.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -216,6 +217,34 @@ char containsDebugFlag(int argc, char const *argv[])
     return 0;
 }
 
+int isExclamation(char *input)
+{
+    if (strlen(input) < 3 || input[0] != '!') {
+        return -1;
+    }
+    if (input[1] == '!' && (input[2] == ' ' || input[2] == '\n'))
+    {
+        return 0;
+    }
+    int i;
+    char num[MAX_INPUT];
+    for (i = 1; i < strlen(input); i++) 
+    {
+        if (!isdigit(input[i])) 
+        {
+            if (input[i] == ' ' || input[i] == '\n')
+            {
+                break;
+            }
+            return -1;
+        }
+        
+        num[i - 1] = input[i];
+    }
+    return atoi(num);
+}
+
+
 int handleSpecialCommands(cmdLine *cmd, process **process_list)
 {
     if (strcmp(cmd->arguments[0], "cd") == 0)
@@ -270,29 +299,64 @@ void freeHistory(char** history) {
     }
 }
 
-void printHistory(char **history, int newest, int oldest)
+void addHistoryLine(char **history, int *newest, int *oldest, char* line)
 {
-    for (int i = newest; i < oldest; i++) {
-        printf(history[i]);
+    if (*newest < 0 && *oldest < 0)
+    {/*History is empty*/
+        *newest = 0, *oldest = 0;
+    }
+    else
+    {
+        *newest = (*newest + 1) % HISTLEN;
+        if (*newest == *oldest) 
+        {
+            free(history[*oldest]);
+            *oldest = (*oldest + 1) % HISTLEN;
+        }
+    }
+    history[*newest] = line;
+}
+
+void printHistory(char **history, int *newest, int *oldest)
+{
+    for (int i = *oldest; i <= *newest; i++) {
+        printf("%d. %s", i + 1, history[i]);
     }
 }
 
-void historyCommands(char **history, int newest, int oldest, cmdLine *cmd)
+void insertLastCmd(char *input, char *lastCmd)
 {
-    char *command = cmd->arguments[0];
-    if (command == "history")
-    {
-        printHistory(history, newest, oldest);
-    }
-    if (command == "!!")
-    {
-        
-    }
-    if (command == "!n")//this is wrong (n is a number)
-    {
-        
-    }
+    lastCmd[strlen(lastCmd) - 1] = '\0';
+    strcat(lastCmd, input + 2);
+    strcpy(input, lastCmd);
 }
+
+int insertNumCmd(char *input, char **history, int oldest, int index)
+{
+
+    char *lineFromHistory = history[(oldest + index - 1) % 20];
+    if (index > HISTLEN || !lineFromHistory)
+    {
+        printf("History is too short\n");
+        return 0;
+    }
+    else
+    {
+        char toInsert[strlen(lineFromHistory)];
+        strcpy(toInsert, lineFromHistory);
+        toInsert[strlen(toInsert) - 1] = '\0';
+        
+        char *suffix = strchr(input, ' ');
+        if (!suffix)
+        {
+            suffix = strchr(input, '\n');
+        }
+        
+        strcat(toInsert, suffix);
+        strcpy(input, toInsert);
+        return 1;
+    }
+}    
 
 void execute(cmdLine *pCmdLine)
 {
@@ -304,7 +368,6 @@ void execute(cmdLine *pCmdLine)
 }
 
 
-//currently on: making sure printHistory works, implementing !!, !n
 int main(int argc, char const *argv[])
 {
     struct process *processList;
@@ -314,7 +377,8 @@ int main(int argc, char const *argv[])
 
     while (1)
     {
-        char buffer[PATH_MAX], input[INPUT_MAX];
+        char buffer[PATH_MAX], input[INPUT_MAX] ;
+        char *history_line;
         getcwd(buffer, PATH_MAX);
         printf("~%s$ ", buffer);
         fgets(input, 2048, stdin);
@@ -328,16 +392,34 @@ int main(int argc, char const *argv[])
         if (strcmp(input, "\n") == 0)
             continue;
 
-        char *history_line = malloc(INPUT_MAX);
-        strcpy(history_line, input);
-        history[++oldest] = history_line;
+        int isExcl = isExclamation(input);
+        if (isExcl == 0)
+        {
+            insertLastCmd(input, history[newest]);
+            printf("%s", input);
+        }
+        else if (isExcl >= 1)
+        {
+            if (!insertNumCmd(input, history, oldest, isExcl))
+            {
+                continue;
+            }
+            printf("%s", input);
+        }
 
-        cmdLine *cmd;
-        cmd = parseCmdLines(input);
+        cmdLine *cmd = parseCmdLines(input);
 
         if (debug == 1)
             printf("Executing: %s", input);
 
+        int isHistoryCommand = strcmp(cmd->arguments[0], "history") == 0;
+        if ((isExcl == -1))
+        {
+            history_line = malloc(INPUT_MAX);
+            strcpy(history_line, input);
+            addHistoryLine(history, &newest, &oldest, history_line);
+        }
+        
         if (handleSpecialCommands(cmd, &processList))
         {
             freeCmdLines(cmd);
@@ -376,13 +458,15 @@ int main(int argc, char const *argv[])
             {
                 freopen(cmd->outputRedirect, "w", stdout);
             }
-            //correct the !n --------------------------------------------------------
-            if (cmd->arguments[0] == "history" || cmd->arguments[0] == "!!" || cmd->arguments[0] == "!n")
+            if (isHistoryCommand)
             {
-                historyCommands(history, newest, oldest, cmd);
+                printHistory(history, &newest, &oldest);
+                exit(0);
             }
             else
+            {
                 execute(cmd);
+            }
         }
         else
         { /*Main process*/
@@ -432,13 +516,7 @@ int main(int argc, char const *argv[])
                     {
                         freopen(cmd->next->outputRedirect, "w", stdout);
                     }
-                    //correct the !n --------------------------------------------------------
-                    if (cmd->next->arguments[0] == "history" || cmd->next->arguments[0] == "!!" || cmd->next->arguments[0] == "!n")
-                    {
-                        historyCommands(history, newest, oldest, cmd->next);
-                    }
-                    else
-                        execute(cmd->next);
+                    execute(cmd->next);
                 }
             }
             usleep(10000);
